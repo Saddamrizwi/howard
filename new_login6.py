@@ -11,7 +11,7 @@ import json
 import tempfile
 import requests
 from langchain_community.llms import HuggingFaceHub
-
+from jwttoken import create_access_token
 
 ###############################################################
 # Initialize FastAPI app
@@ -227,15 +227,21 @@ async def sign_up(sign_up_request: SignUpRequest):
 
 @app.post("/login")
 async def login(loginresponse: LoginResponse):  
+    # request: Request, 
     email = loginresponse.email
     password = loginresponse.password
     # Establish database connection
     conn = establish_db_connection()
     # Create session
     id = validate_credentials(email, password)
-    # Close database connection
+    access_token = create_access_token(data={"sub": loginresponse.email})
+   # Close database connection
     close_db_connection(conn)
-    return {"message": "Login successful", "email_id": id}    
+    return {"access_token": access_token, "token_type": "bearer"}
+    # Close database connection
+    # close_db_connection(conn)
+    # return {"message": "Login successful", "email_id": id}    
+  
 
 @app.post("/logout")
 async def logout(id: str):
