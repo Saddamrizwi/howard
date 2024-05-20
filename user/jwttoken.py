@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
-# from . import schemas 
+from . import schemas 
 
 SECRET_KEY = "ba524430b687c4076dbb695f98967ce68ad68cc299d1130b980edc089a88ab9e"
 ALGORITHM = "HS256"

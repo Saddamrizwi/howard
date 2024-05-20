@@ -1,6 +1,7 @@
 import requests
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request,Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 import psycopg2
 import os
@@ -9,59 +10,27 @@ from uuid import uuid4
 from fastapi.responses import HTMLResponse
 import json
 import tempfile
-import requests
 from langchain_community.llms import HuggingFaceHub
-from jwttoken import create_access_token
-
-###############################################################
-# Initialize FastAPI app
-app = FastAPI()
-
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"]
-)   
+from . import  models
+from fastapi import Request
+from . import  models, schemas,hashing,oauth2
+from .jwttoken import  create_access_token
+from fastapi import APIRouter
+from fastapi import FastAPI
+from database import engine
+from sqlalchemy import create_engine, Table, Column, Integer, String, Text, Boolean, ForeignKey, DateTime, MetaData
+from sqlalchemy.orm import Session
+from typing import List 
+from .schemas import SignUpRequest,LoginResponse,DataUpload,ReviewRequest,ReviewFavourite,ReviewResponse,GetChat
+router = APIRouter()
 
 # Database connection parameters
-DB_HOST = 'monorail.proxy.rlwy.net'
-DB_PORT = 39635
+DB_HOST = 'localhost'
+DB_PORT = 5432
 DB_USER = 'postgres'
-DB_PASSWORD = '65jJ4lAqgQaP7u7ZVnIjBYiUgry82ZDP'
-DB_NAME = 'railway'
+DB_PASSWORD = 'King#123'
+DB_NAME = 'latest_llm'
 
-class SignUpRequest(BaseModel):
-    email: str
-    password: str
-    username: str
-
-class LoginResponse(BaseModel):
-    email: str
-    password: str
-
-class DataUpload(BaseModel):
-    file:str 
-
-class ReviewRequest(BaseModel):
-    id: str       
-
-class ReviewFavourite(BaseModel):
-    chat_id: str
-    favourite: str    
-
-class ReviewResponse(BaseModel):
-    email_id: str
-    query: str
-    llm: str
-    name: str
-    chat_id: str
-
-class GetChat(BaseModel):
-    email_id: str
-    chat_id: str
 
 def establish_db_connection():
     """Establishes connection to the PostgreSQL database and creates necessary tables."""
@@ -139,6 +108,8 @@ def create_chat_id(conn, email_id):
     return chat_id
 
 def create_chat_history(conn):
+    enable_extension_query = 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'
+
     # Create chat history table if it doesn't exist
     chat_table_query = """
         CREATE TABLE IF NOT EXISTS chat_history6 (
@@ -150,7 +121,12 @@ def create_chat_history(conn):
             favourite BOOLEAN DEFAULT FALSE
         );"""
     with conn.cursor() as cur:
+        # Execute the query to enable the extension
+        cur.execute(enable_extension_query)
+        # Execute the query to create the table
         cur.execute(chat_table_query)
+    
+    # Commit the transaction
     conn.commit()
 
 # Establish database connection and create table/function
@@ -201,7 +177,7 @@ def query_chat(query, llm):
         response = requests.post(API_URL, json=payload)     
     return response.json()    
 
-@app.get("/Registration")
+@router.get("/Registration")
 async def login_form():
     return HTMLResponse("""
         <form method="post">
@@ -215,7 +191,7 @@ async def login_form():
         </form>
     """)
 
-@app.post("/sign_up")
+@router.post("/sign_up",tags=['authetication'])
 async def sign_up(sign_up_request: SignUpRequest):
     try:
         id, session_id = create_session(sign_up_request.email, sign_up_request.password, sign_up_request.username)
@@ -225,25 +201,20 @@ async def sign_up(sign_up_request: SignUpRequest):
     except Exception as e:
         raise HTTPException(status_code=422, detail="Unprocessable entity")
 
-@app.post("/login")
-async def login(loginresponse: LoginResponse):  
-    # request: Request, 
-    email = loginresponse.email
+@router.post("/login")
+async def login(loginresponse: OAuth2PasswordRequestForm = Depends()):  
+    email = loginresponse.username
     password = loginresponse.password
-    # Establish database connection
-    conn = establish_db_connection()
-    # Create session
+    
+    # Validate credentials
     id = validate_credentials(email, password)
-    access_token = create_access_token(data={"sub": loginresponse.email})
-   # Close database connection
-    close_db_connection(conn)
-    return {"access_token": access_token, "token_type": "bearer"}
-    # Close database connection
-    # close_db_connection(conn)
-    # return {"message": "Login successful", "email_id": id}    
-  
+    
+    # Create access token
+    access_token = create_access_token(data={"sub": email})
+    
+    return {"access_token": access_token, "token_type": "bearer"}  
 
-@app.post("/logout")
+@router.post("/logout")
 async def logout(id: str):
     # Check if session_id exists in the database
     conn = establish_db_connection()
@@ -256,7 +227,7 @@ async def logout(id: str):
     else:
         raise HTTPException(status_code=404, detail="Session not found")
 
-@app.delete("/delete_id")
+@router.delete("/delete_id")
 async def delete_session(email_id: str):
     # Establish database connection
     conn = establish_db_connection()
@@ -268,7 +239,7 @@ async def delete_session(email_id: str):
     return {"message": "Session deleted successfully"}
 
 
-@app.get("/dashboard/{session_id}")
+@router.get("/dashboard/{session_id}")
 async def dashboard(id: str):
     # Check if session_id exists in the database
     conn = establish_db_connection()
@@ -283,7 +254,7 @@ async def dashboard(id: str):
     else:
         raise HTTPException(status_code=404, detail="Session not found")
 
-@app.post("/upload_data")
+@router.post("/upload_data")
 async def upload_data(file: UploadFile = File(...)):
     file_extension = os.path.splitext(file.filename)[1].lower()
     if file_extension in ['.pdf', '.docx', '.doc', '.pptx', '.ppt']:
@@ -298,9 +269,10 @@ async def upload_data(file: UploadFile = File(...)):
     else:
         return {"message": f"Try Another File: Processing skipped for {file.filename}"}
 
-@app.post("/get_history")
-async def get_review(review_request: ReviewRequest):
-    email_id = review_request.id
+@router.post("/get_history")
+async def get_review(review_request: ReviewRequest,current_user:schemas.LoginResponse=Depends(oauth2.get_current_user)):
+    # email_id = current_user.id
+    # print("cgvggwfkcw",current_user)
     chat_data = []
     topic = None  # Initialize topic as None in case no messages are found
     with establish_db_connection() as conn:
@@ -328,8 +300,8 @@ async def get_review(review_request: ReviewRequest):
                     })        
     return  chat_data
 
-@app.post("/get_favourite")
-async def get_review(review_favourite: ReviewFavourite):
+@router.post("/get_favourite")
+async def get_review(review_favourite: ReviewFavourite,current_user:schemas.LoginResponse=Depends(oauth2.get_current_user)):
     chat_id = review_favourite.chat_id
     chat_data = []
     # Update favourite status if requested and there's a mismatch
@@ -362,8 +334,8 @@ async def get_review(review_favourite: ReviewFavourite):
                 })
     return chat_data
 
-@app.post("/process_answer")
-async def process_answer(review_response: ReviewResponse):
+@router.post("/process_answer")
+async def process_answer(review_response: ReviewResponse,current_user:schemas.LoginResponse=Depends(oauth2.get_current_user)):
     email_id = review_response.email_id
     query = review_response.query
     llm = review_response.llm
@@ -440,7 +412,7 @@ async def process_answer(review_response: ReviewResponse):
         "favourite": favourite
     }
 
-@app.get("/new_chat")
+@router.get("/new_chat")
 async def new_chat(email_id: str):
     email_id: str
     with establish_db_connection() as conn:
@@ -449,8 +421,8 @@ async def new_chat(email_id: str):
         conn.commit()
     return chat_id        
 
-@app.post("/get_conversation")
-async def get_chat(get_chat: GetChat):
+@router.post("/get_conversation")
+async def get_chat(get_chat: GetChat,current_user:schemas.LoginResponse=Depends(oauth2.get_current_user)):
     email_id = get_chat.email_id
     chat_id = get_chat.chat_id
     with establish_db_connection() as conn:
@@ -466,3 +438,117 @@ async def get_chat(get_chat: GetChat):
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8001)
+
+
+
+
+
+
+
+
+
+
+# Dependency to get the database session
+# def get_db():
+#     db = SessionLocal()
+#     try:
+#         yield db
+#     finally:
+#         db.close()
+
+# @router.get("/")
+# def read_root():
+#     return {"Hello": "World"}
+
+
+# @router.post("/sign_up",tags=["authentication"],status_code=200,response_model=schemas.SignUpRequest)  
+# def create_user(request:schemas.SignUpRequest,db: Session = Depends(get_db)):
+#     new_user=models.User(username=request.username,email=request.email,password=hashing.Hash.bcrypt(request.password))
+#     print("cvfgvcgsfvfycsfvsfsvcsfdv---------->",new_user)
+#     existing_email = db.query(models.User).filter(models.User.email == request.email).first()
+#     print("hgdggvgfvgarcgcvv",existing_email)
+#     if existing_email:
+#         raise HTTPException(status_code=400, detail="Email already registered")
+#     db.add(new_user)
+#     db.commit()
+#     db.refresh(new_user)
+#     return new_user
+
+
+
+
+
+#here is the api for create chat..
+
+
+# @router.post("/process_answer")
+# async def process_answer(
+#     # current_user: schemas.TokenData = Depends(oauth2.get_current_user),
+#     query: str = Form(...),
+#     llm: str = Form(...),
+#     chat_id: int = Form(...),
+#     db: Session = Depends(get_db)
+#     ):
+#     # parts = output['text'].split("Human:")[0]):
+#     # user_id = review_response.email_id
+#     if not chat_id:
+#         new_chat = models.ChatHistory(email_id=email_id)
+#         print("fcgssdhcad",)
+#         db.add(new_chat)
+#         db.commit()
+#         db.refresh(new_chat)
+#         chat_id = new_chat.chat_id
+
+#     chat_history = db.query(ChatHistory).filter_by(email_id=email_id, chat_id=chat_id).first()
+
+#     if chat_history:
+#         conversation = json.loads(chat_history.all_messages) if chat_history.all_messages else []
+#         favourite = chat_history.favourite
+#     else:
+#         conversation = [{
+#             "message": "Hi, I am ChatBot AI Assistant!",
+#             "type": "bot",
+#             "image": "https://picsum.photos/50/50",
+#             "name": "AI ChatBot"
+#         }]
+#         favourite = False
+
+#     user_message = {
+#         "message": f"{query}",
+#         "type": "user",
+#         "image": "https://picsum.photos/50/50",
+#         "name": name if name else "User"
+#     }
+#     conversation.append(user_message)
+
+#     new_message = {
+#         "message": f"{parts}",
+#         "type": "bot",
+#         "image": "https://picsum.photos/50/50",
+#         "name": "AI ChatBot"
+#     }
+#     conversation.append(new_message)
+#     history_json = json.dumps(conversation)
+
+#     if chat_history:
+#         chat_history.all_messages = history_json
+#         db.commit()
+#     else:
+#         new_chat = ChatHistory(
+#             email_id=email_id,
+#             chat_id=chat_id,
+#             all_messages=history_json
+#         )
+#         db.add(new_chat)
+#         db.commit()
+
+#     return {
+#         "answer": parts,
+#         "data": history_json,
+#         "chatId": chat_id,
+#         "llm": llm,
+#         "favourite": favourite
+#     }
+
+
+
