@@ -10,7 +10,7 @@ from uuid import uuid4
 from fastapi.responses import HTMLResponse
 import json
 import tempfile
-from langchain_community.llms import HuggingFaceHub
+from langchain_community.llms import HuggingFaceEndpoint
 from . import  models
 from fastapi import Request
 from . import  models, schemas,hashing,oauth2
@@ -21,26 +21,33 @@ from database import engine
 from sqlalchemy import create_engine, Table, Column, Integer, String, Text, Boolean, ForeignKey, DateTime, MetaData
 from sqlalchemy.orm import Session
 from typing import List 
-from .schemas import SignUpRequest,LoginResponse,DataUpload,ReviewRequest,ReviewFavourite,ReviewResponse,GetChat
+from .schemas import SignUpRequest,LoginResponse,DataUpload,ReviewRequest,ReviewFavourite,ReviewResponse,GetChat,TransactionResponse
+from datetime import datetime, timedelta
+from langdetect import detect
+from nltk.stem import WordNetLemmatizer
+from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords
+import jieba
+from langchain_core.runnables.base import RunnableSequence, Runnable
+from langchain.prompts import PromptTemplate
+import http.client
+import base64
+from typing import Dict
 
+
+##################################
 router = APIRouter()
 
-# Database connection parameters
-DB_HOST = 'localhost'
-DB_PORT = 5432
-DB_USER = 'postgres'
-DB_PASSWORD = 'King#123'
-DB_NAME = 'latest_llm'
-
+free_usage_counts: Dict[str, int] = {}
 
 def establish_db_connection():
     """Establishes connection to the PostgreSQL database and creates necessary tables."""
     conn = psycopg2.connect(
-        database=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        host=DB_HOST,
-        port=DB_PORT
+        database="railway",
+        user="postgres",
+        password="65jJ4lAqgQaP7u7ZVnIjBYiUgry82ZDP",
+        host="monorail.proxy.rlwy.net",
+        port="39635"
     )
     # Create sessions table if not exists
     session_table = """ 
@@ -102,49 +109,56 @@ def get_credit(user_id, num_tokens):
 
 def topic_model(text):
     text = text.strip()
-    llm = HuggingFaceHub(repo_id="meta-llama/Meta-Llama-3-8B-Instruct",
-                        model_kwargs={"temperature": 0.1, "max_length":10},
-                        huggingfacehub_api_token='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',)
-                        #    huggingfacehub_api_token='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',)
-                        #    huggingfacehub_api_token='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',)
-                        #    huggingfacehub_api_token='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',)
-                        #    huggingfacehub_api_token='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',)
+    # Updated LLM instantiation using HuggingFaceEndpoint
+    llm = HuggingFaceEndpoint(
+        endpoint_url="https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3-8B-Instruct",
+        huggingfacehub_api_token='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',
+        temperature=0.1,
+        max_new_tokens=10)
+    # Define the prompt template
     template = """ Summarize whole text and give a suitable title from this text in just 3 words only.
     {text}
     TITLE OF SUMMARY:
-    """    
+    """
     prompt = PromptTemplate(template=template, input_variables=["text"])
-    llm_chain = LLMChain(prompt=prompt, llm=llm)
-    topic = llm_chain.run(text)
-    title = topic.split("TITLE OF SUMMARY:\n")[1].split("\n")[0]
-    zabbar = title.replace('"', '').strip()
-    return zabbar
+    # Create a runnable sequence
+    runnable_sequence = RunnableSequence(first=prompt, last=llm)
+    # Run the sequence
+    result = runnable_sequence.invoke({"text": text}).split("\n")[0].replace('"', '').strip()
+    return result
 
-def transaction_record(user_id, type_is_paid):
+def transaction_record_1(session_id, created_date, payment_status, amount_total, currency, payment_intent, user_id):
+    print("cfiwvfgweuwegiwe",session_id,created_date, payment_status, amount_total, currency, payment_intent, user_id)
     try:
         conn = establish_db_connection()
         with conn.cursor() as cur:
-            amount = 100 if type_is_paid.lower() == "true" else 20
-            created_date = datetime.now()
+            if payment_status.lower() == "paid":
+                user_type = 'active'
+            else:
+                amount_total = 0    
             expiry_date = created_date + timedelta(days=30)
             # Insert the record
             insert_query = """
-                INSERT INTO transaction (user_id, session_id, created_date, expiry_date, type, amount, amount_left)
-                VALUES (%s, %s, %s, %s, %s, %s, %s);
+                UPDATE public.transaction
+                SET session_id = %s, created_date = %s, expiry_date = %s, user_type = %s, payment_intent = %s, amount = %s, amount_left = %s, currency = %s
+                WHERE user_id = %s
             """
             cur.execute(insert_query, (
-                user_id, 
-                1, 
-                created_date, 
-                expiry_date, 
-                type_is_paid, 
-                amount, 
-                amount 
+                session_id,
+                created_date,
+                expiry_date,
+                user_type,
+                payment_intent,
+                amount_total,
+                amount_total,
+                currency,
+                user_id
             ))
+        print("vtqcuweyfgscvgjdutfgejwvdSyzwsdvhfw",insert_query)
         conn.commit()
         conn.close()
     except Exception as e:
-        return (f"An error occurred: {e}")
+        return f"An error occurred: {e}" 
 
 def create_session(email, password, username):
     """Creates a new session for the user if not already registered."""
@@ -223,24 +237,39 @@ def create_chat_history(conn):
 
 def create_price_record(conn):
     try:
-        # Create chat history table if it doesn't exist
+            # Define the enum type if it doesn't exist
+        enum_query = """
+            DO $$ BEGIN
+                IF NOT EXISTS(SELECT 1 FROM pg_type WHERE typname = 'user_type_enum') THEN
+                    CREATE TYPE user_type_enum AS ENUM ('active', 'inactive', 'free');
+                END IF;
+            END $$;
+            """
+        with conn.cursor() as cur:
+            cur.execute(enum_query)
+
+        # Create chat price table if it doesn't exist
         price_record_query = """
             CREATE TABLE IF NOT EXISTS transaction (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER REFERENCES session_table6(id),
-                session_id INTEGER NOT NULL,
-                created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                payment_intent VARCHAR(255),
+                currency VARCHAR(10),
+                session_id VARCHAR(255) NOT NULL,
+                created_date TIMESTAMP,
                 expiry_date TIMESTAMP,
-                type BOOLEAN,
+                user_type user_type_enum NOT NULL,
                 amount NUMERIC,
                 amount_left NUMERIC
-            );"""
+            );
+            """
         with conn.cursor() as cur:
             cur.execute(price_record_query)
+        
         conn.commit()
     except Exception as e:
-        pass
-        # raise HTTPException(status_code=500, detail="Internal Server Error")               
+        pass 
+        raise HTTPException(status_code=500, detail="Internal Server Error")               
 
 # Establish database connection and create table/function
 conn = establish_db_connection()
@@ -287,7 +316,7 @@ def upload_file(file, api_url):
 
 def query_chat(query, llm):
     """Queries chat API with the given question."""
-    if llm.lower() == "chinese":
+    if llm.lower() == "deepseek-ai":
         API_URL = "https://flowiseai-railway-production-51c3.up.railway.app/api/v1/prediction/eee04920-13ad-43d1-969e-1a22bfab992c"
         payload = {"question": query}
         response = requests.post(API_URL, json=payload)
@@ -296,12 +325,109 @@ def query_chat(query, llm):
         payload = {"question": query}
         response = requests.post(API_URL, json=payload) 
     else:
-        if llm.lower() == "open source":
-            API_URL = "https://flowiseai-railway-production-51c3.up.railway.app/api/v1/prediction/c9e1bada-3ba0-4f45-b543-9ac19250bfa8"
-            # API_URL = "https://flowiseai-railway-production-51c3.up.railway.app/api/v1/prediction/4552bc8a-84ba-4b40-86f5-a1148729f815"
-            payload = {"question": query}
-            response = requests.post(API_URL, json=payload)     
-    return response.json()    
+        # if llm.lower() == "llama3 8b":
+        API_URL = "https://flowiseai-railway-production-51c3.up.railway.app/api/v1/prediction/c9e1bada-3ba0-4f45-b543-9ac19250bfa8"
+        # API_URL = "https://flowiseai-railway-production-51c3.up.railway.app/api/v1/prediction/4552bc8a-84ba-4b40-86f5-a1148729f815"
+        payload = {"question": query}
+        response = requests.post(API_URL, json=payload)     
+    return response.json() 
+
+def get_answer(email_id, query, llm, chat_id):    
+    page_contents = []
+    try:
+        output = query_chat(query, llm) 
+        parts = output['text'].split("Human:")[0].strip()#.split("AI Assistant:")[1]
+        metadata = output['sourceDocuments']
+        for doc in metadata:
+            title = doc.get('metadata', {}).get('pdf', {}).get('Title', 'No Title')
+            page_cont = doc.get('pageContent', 'No Content')
+            page_content = ' '.join(page_cont.strip().split()[:8])
+            page_info = {
+            "title": title,
+            "content": page_content
+            }
+            page_contents.append(page_info)
+        all_answers = parts + '\n' + 'metadata: ' + ', '.join([f"{page['title']}: {page['content']}\n" for page in page_contents])   
+        one_chat = query + parts
+        credit_left = get_credit(email_id, one_chat)  
+        # Check if chat_id is empty, if yes, create a new chat_id
+        if chat_id == "":
+            with establish_db_connection() as conn:
+                chat_id = create_chat_id(conn, email_id)
+            conn.commit()  
+        # Fetch existing chat history or initialize if none exists
+        with establish_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT all_messages, favourite, topic
+                    FROM public.chat_history7
+                    WHERE email_id = %s AND chat_id = %s;
+                """, (email_id, chat_id))
+                existing_row = cur.fetchone()
+                favourite = existing_row[1] if existing_row else None
+                history_json = existing_row[0] if existing_row else None
+                if history_json:
+                    conversation = json.loads(history_json)
+                else:
+                    conversation = []
+                    conversation.append({
+                        "message": "Hi, I am ChatBot AI Assistant!",
+                        "type": "bot",
+                        "image": "https://picsum.photos/50/50",
+                        "name": "AI ChatBot"
+                    })
+                
+                # Append user's message to the conversation
+                user_message = {
+                    "message": f"{query}",
+                    "type": "user",
+                    "image": "https://picsum.photos/50/50",
+                    "name": "User"
+                }
+                conversation.append(user_message)
+                
+                # Append new message to the conversation
+                new_message = {
+                    "message": f"{parts}",
+                    "type": "bot",
+                    "image": "https://picsum.photos/50/50",
+                    "name": "AI ChatBot"
+                }
+                conversation.append(new_message)
+                topic = existing_row[2] if existing_row else None
+                if topic is None:
+                    if len(conversation) >= 3:  # Check if there are at least 3 messages
+                        text = conversation[2]["message"]
+                        topic = topic_model(text)
+                # Convert the conversation back to JSON string
+                history_json = json.dumps(conversation)        
+                # Insert or update the row in the database
+                if existing_row:
+                    cur.execute("""
+                        UPDATE public.chat_history7
+                        SET all_messages = %s, topic = %s
+                        WHERE email_id = %s AND chat_id = %s;
+                    """, (history_json, topic, email_id, chat_id))
+                else:
+                    cur.execute("""
+                        INSERT INTO public.chat_history7 (email_id, chat_id, all_messages)
+                        VALUES (%s, %s, %s, %s);
+                    """, (email_id, chat_id, history_json, topic))
+            conn.commit()   
+        close_db_connection(conn)    
+        # Return updated chat history along with chat ID
+        return {
+            "whole_answer": all_answers,
+            "answer": parts,
+            "data": history_json,
+            "chatId": chat_id,
+            "llm": llm,
+            "favourite": favourite,
+            "metadata": page_contents,
+            "new_credit": credit_left
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"{e}")
 
 @router.get("/Registration")
 async def login_form():
@@ -318,7 +444,7 @@ async def login_form():
     """)
 
 @router.post("/sign_up",tags=['authetication'])
-async def sign_up(sign_up_request: SignUpRequest):
+async def sign_up(sign_up_request: schemas.SignUpRequest):
     try:
         
         id, session_id = create_session(sign_up_request.email, sign_up_request.password, sign_up_request.username) 
@@ -327,18 +453,128 @@ async def sign_up(sign_up_request: SignUpRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.post("/login",tags=['authetication'])
+@router.post("/login", tags=['authentication'])
 async def login(loginresponse: OAuth2PasswordRequestForm = Depends()):  
     email = loginresponse.username
     password = loginresponse.password
     
     # Validate credentials
-    id = validate_credentials(email, password)
+    user = validate_credentials(email, password)
+    user_id = user[0]
+    user_name = user[1]
+    
+    # Initialize subscription_status
+    subscription_status = 'unknown'
+    
+    conn = establish_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM public.transaction WHERE user_id = %s ORDER BY id ASC", (user_id,))
+            rows = cur.fetchall()
+            
+            if not rows:
+                # Insert default record if no transaction exists for the user
+                created_date = datetime.now()
+                expiry_date = None
+                session_id = None
+                amount = 0
+                amount_left = 0
+                currency = None
+                payment_intent = None
+                insert_query = """
+                INSERT INTO transaction (user_id, session_id, created_date, expiry_date, type_is_paid, amount, amount_left, payment_intent, currency)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+                """
+                cur.execute(insert_query, (
+                    user_id, 
+                    session_id, 
+                    created_date, 
+                    expiry_date, 
+                    'free',
+                    amount,
+                    amount_left,
+                    payment_intent,
+                    currency   
+                ))
+                conn.commit()
+                subscription_status = 'free'
+            else:
+                # Check subscription status from existing records
+                if any(isinstance(item, str) and 'active' in item.strip().lower() for item in rows[0]):
+                    subscription_status = 'active'
+                elif any(isinstance(item, str) and 'free' in item.strip().lower() for item in rows[0]):
+                    subscription_status = 'free'
+                else:
+                    subscription_status = 'inactive'
+    except Exception as e:
+        conn.rollback()
+        print(f"Database error: {e}")
+    finally:
+        conn.close()
     
     # Create access token
     access_token = create_access_token(data={"sub": email})
-    
-    return {"access_token": access_token, "token_type": "bearer"} 
+    return {"access_token": access_token, "token_type": "bearer", "email_id": user_id, "username": user_name, "type_is_paid": subscription_status}  
+
+@router.post("/transaction")
+async def transaction(transactionresponse: TransactionResponse):
+    email_id = transactionresponse.email_id
+    session_id = transactionresponse.session_id
+    created_date = datetime.strptime(transactionresponse.created_date, "%Y-%m-%d %H:%M:%S.%f")
+    type_is_paid=transactionresponse.type_is_paid
+    try:
+        transaction_record_1(email_id, session_id, created_date, type_is_paid)
+        return{"message": "Database updated successfully."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Internal Server Error")     
+ 
+
+secret_key='sk_test_51PEnAKLD2jJqby2hSGIkRf9h4otYfKDoEI6R53EArk6RrnXzj5SuXy3ztFDkpOBjuoGAdhMlTGVu0IFJpsD61ebP00SMSMwP0D' 
+
+@router.get("/webhook_callback")
+async def webhook_callback(request: Request):
+    query_params = dict(request.query_params)
+    session_id = request.query_params.get('session_id')
+    user_id = request.query_params.get('user')
+    print("gckvuwwec",user_id)
+
+    if not session_id or not user_id:
+        raise HTTPException(status_code=400, detail="Missing session_id or user_id")
+
+    stripe_url = f"https://api.stripe.com/v1/checkout/sessions/{session_id}"
+    encoded_secret_key = base64.b64encode(f"{secret_key}:".encode()).decode()
+
+    conn = http.client.HTTPSConnection("api.stripe.com")
+    payload = ''
+    headers = {
+        'Authorization': f'Basic {encoded_secret_key}'
+    }
+    conn.request("GET", f"/v1/checkout/sessions/{session_id}", payload, headers)
+    res = conn.getresponse()
+    data = res.read()
+
+    # Decode the response from Stripe
+    stripe_response = data.decode("utf-8")
+    try:
+        stripe_data = json.loads(stripe_response)
+    except json.JSONDecodeError as e:
+        return {"error": "Failed to parse JSON response from Stripe"}
+
+    session_id = stripe_data.get("id")
+    payment_status = stripe_data.get("payment_status")
+    payment_intent = stripe_data.get("payment_intent")
+    amount_total = stripe_data.get("amount_total")
+    currency = stripe_data.get("currency")
+    created_date = datetime.now()
+
+    try:
+        transaction_record_1(session_id, created_date, payment_status, amount_total, currency, payment_intent, user_id)
+        redirect_url = "http://20.84.59.3:3000/payment_status/success"          
+        return redirect(redirect_url)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
+
+    return {"message": stripe_response}
 
 @router.post("/logout")
 async def logout(id: str):
@@ -410,7 +646,7 @@ async def get_review(review_request: ReviewRequest,current_user:schemas.LoginRes
                     SELECT chat_id, all_messages, favourite, topic, timestamp
                     FROM public.chat_history7
                     WHERE email_id = %s
-                    ORDER BY chat_id DESC;        ;
+                    ORDER BY timestamp DESC;        ;
                 """, (email_id,))
                 rows = cur.fetchall()
                 for row in rows:
@@ -502,12 +738,9 @@ async def process_answer(review_response: ReviewResponse,current_user:schemas.Lo
     email_id = review_response.email_id
     query = review_response.query
     llm = review_response.llm
-    name = review_response.name
     chat_id = review_response.chat_id
-    type = review_response.type
     page_contents = []
     try:
-        # transaction_record(email_id, type)
         output = query_chat(query, llm) 
         parts = output['text'].split("Human:")[0].strip()#.split("AI Assistant:")[1]
         metadata = output['sourceDocuments']
@@ -554,7 +787,7 @@ async def process_answer(review_response: ReviewResponse,current_user:schemas.Lo
                     "message": f"{query}",
                     "type": "user",
                     "image": "https://picsum.photos/50/50",
-                    "name": name if name else "User"
+                    "name": "User"
                 }
                 conversation.append(user_message)
                 
@@ -598,7 +831,9 @@ async def process_answer(review_response: ReviewResponse,current_user:schemas.Lo
             "new_credit": credit_left
         }
     except Exception as e:
-        raise HTTPException(detail=f"{e}")
+        raise HTTPException(status_code=500, detail=f"{e}")
+
+
     
 @router.get("/new_chat")
 async def new_chat(email_id: str):
@@ -637,119 +872,3 @@ async def get_chat(get_chat: GetChat,current_user:schemas.LoginResponse=Depends(
     except Exception as e:
         pass
         # raise HTTPException(status_code=500, detail="Internal Server Error")
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8001)
-
-
-
-
-
-
-
-
-
-
-# Dependency to get the database session
-# def get_db():
-#     db = SessionLocal()
-#     try:
-#         yield db
-#     finally:
-#         db.close()
-
-# @router.get("/")
-# def read_root():
-#     return {"Hello": "World"}
-
-
-# @router.post("/sign_up",tags=["authentication"],status_code=200,response_model=schemas.SignUpRequest)  
-# def create_user(request:schemas.SignUpRequest,db: Session = Depends(get_db)):
-#     new_user=models.User(username=request.username,email=request.email,password=hashing.Hash.bcrypt(request.password))
-#     print("cvfgvcgsfvfycsfvsfsvcsfdv---------->",new_user)
-#     existing_email = db.query(models.User).filter(models.User.email == request.email).first()
-#     print("hgdggvgfvgarcgcvv",existing_email)
-#     if existing_email:
-#         raise HTTPException(status_code=400, detail="Email already registered")
-#     db.add(new_user)
-#     db.commit()
-#     db.refresh(new_user)
-#     return new_user
-
-
-
-
-
-#here is the api for create chat..
-
-
-# @router.post("/process_answer")
-# async def process_answer(
-#     # current_user: schemas.TokenData = Depends(oauth2.get_current_user),
-#     query: str = Form(...),
-#     llm: str = Form(...),
-#     chat_id: int = Form(...),
-#     db: Session = Depends(get_db)
-#     ):
-#     # parts = output['text'].split("Human:")[0]):
-#     # user_id = review_response.email_id
-#     if not chat_id:
-#         new_chat = models.ChatHistory(email_id=email_id)
-#         print("fcgssdhcad",)
-#         db.add(new_chat)
-#         db.commit()
-#         db.refresh(new_chat)
-#         chat_id = new_chat.chat_id
-
-#     chat_history = db.query(ChatHistory).filter_by(email_id=email_id, chat_id=chat_id).first()
-
-#     if chat_history:
-#         conversation = json.loads(chat_history.all_messages) if chat_history.all_messages else []
-#         favourite = chat_history.favourite
-#     else:
-#         conversation = [{
-#             "message": "Hi, I am ChatBot AI Assistant!",
-#             "type": "bot",
-#             "image": "https://picsum.photos/50/50",
-#             "name": "AI ChatBot"
-#         }]
-#         favourite = False
-
-#     user_message = {
-#         "message": f"{query}",
-#         "type": "user",
-#         "image": "https://picsum.photos/50/50",
-#         "name": name if name else "User"
-#     }
-#     conversation.append(user_message)
-
-#     new_message = {
-#         "message": f"{parts}",
-#         "type": "bot",
-#         "image": "https://picsum.photos/50/50",
-#         "name": "AI ChatBot"
-#     }
-#     conversation.append(new_message)
-#     history_json = json.dumps(conversation)
-
-#     if chat_history:
-#         chat_history.all_messages = history_json
-#         db.commit()
-#     else:
-#         new_chat = ChatHistory(
-#             email_id=email_id,
-#             chat_id=chat_id,
-#             all_messages=history_json
-#         )
-#         db.add(new_chat)
-#         db.commit()
-
-#     return {
-#         "answer": parts,
-#         "data": history_json,
-#         "chatId": chat_id,
-#         "llm": llm,
-#         "favourite": favourite
-#     }
-
-
-

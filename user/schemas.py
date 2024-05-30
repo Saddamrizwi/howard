@@ -32,8 +32,14 @@ class ReviewResponse(BaseModel):
     email_id: str
     query: str
     llm: str
-    name: str
     chat_id: str
+
+class TransactionResponse(BaseModel):
+    email_id: int
+    session_id: str
+    created_date: str
+    type_is_paid: str
+
 
 class GetChat(BaseModel):
     email_id: str

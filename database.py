@@ -14,7 +14,7 @@ from sqlalchemy import create_engine, MetaData, Table, Column, Integer, String
 
 # Database URL
 SQLALCHEMY_DATABASE_URL = "postgresql://postgres:King#123@localhost/latest_llm"
-
+    
 # Create the SQLAlchemy engine
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
 
