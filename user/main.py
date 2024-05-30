@@ -43,11 +43,11 @@ free_usage_counts: Dict[str, int] = {}
 def establish_db_connection():
     """Establishes connection to the PostgreSQL database and creates necessary tables."""
     conn = psycopg2.connect(
-        database="railway",
+        database="latest_llm",
         user="postgres",
-        password="65jJ4lAqgQaP7u7ZVnIjBYiUgry82ZDP",
-        host="monorail.proxy.rlwy.net",
-        port="39635"
+        password="King#123",
+        host="localhost",
+        port="5432"
     )
     # Create sessions table if not exists
     session_table = """ 
@@ -454,24 +454,24 @@ async def sign_up(sign_up_request: schemas.SignUpRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/login", tags=['authentication'])
-async def login(loginresponse: OAuth2PasswordRequestForm = Depends()):  
+async def login(loginresponse: OAuth2PasswordRequestForm = Depends()):
     email = loginresponse.username
     password = loginresponse.password
     
     # Validate credentials
     user = validate_credentials(email, password)
-    user_id = user[0]
-    user_name = user[1]
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     
-    # Initialize subscription_status
-    subscription_status = 'unknown'
-    
+    user_id, user_name = user
+    subscription_status = 'free'
+    print("kjfgbievguf gferkdg")
     conn = establish_db_connection()
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM public.transaction WHERE user_id = %s ORDER BY id ASC", (user_id,))
             rows = cur.fetchall()
-            
+
             if not rows:
                 # Insert default record if no transaction exists for the user
                 created_date = datetime.now()
@@ -481,8 +481,10 @@ async def login(loginresponse: OAuth2PasswordRequestForm = Depends()):
                 amount_left = 0
                 currency = None
                 payment_intent = None
+                user_type = 'free'
+                
                 insert_query = """
-                INSERT INTO transaction (user_id, session_id, created_date, expiry_date, type_is_paid, amount, amount_left, payment_intent, currency)
+                INSERT INTO transaction (user_id, session_id, created_date, expiry_date, user_type, amount, amount_left, payment_intent, currency)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
                 """
                 cur.execute(insert_query, (
@@ -490,31 +492,40 @@ async def login(loginresponse: OAuth2PasswordRequestForm = Depends()):
                     session_id, 
                     created_date, 
                     expiry_date, 
-                    'free',
+                    user_type,
                     amount,
                     amount_left,
                     payment_intent,
                     currency   
                 ))
                 conn.commit()
-                subscription_status = 'free'
             else:
                 # Check subscription status from existing records
-                if any(isinstance(item, str) and 'active' in item.strip().lower() for item in rows[0]):
+                if any(isinstance(item, str) and 'active' in item.strip().lower() for item in rows):
                     subscription_status = 'active'
-                elif any(isinstance(item, str) and 'free' in item.strip().lower() for item in rows[0]):
+                elif any(isinstance(item, str) and 'free' in item.strip().lower() for item in rows):
                     subscription_status = 'free'
                 else:
                     subscription_status = 'inactive'
+            
+            access_token = create_access_token(data={"sub": email})
+            print("lfbeuvygiugier",access_token)
+            return {
+                "access_token": access_token, 
+                "token_type": "bearer", 
+                "email_id": user_id, 
+                "username": user_name, 
+                "user_type": subscription_status
+            }
     except Exception as e:
         conn.rollback()
         print(f"Database error: {e}")
     finally:
         conn.close()
     
-    # Create access token
-    access_token = create_access_token(data={"sub": email})
-    return {"access_token": access_token, "token_type": "bearer", "email_id": user_id, "username": user_name, "type_is_paid": subscription_status}  
+    # # Create access token
+    # access_token = create_access_token(data={"sub": email})
+    # return {"access_token": access_token, "token_type": "bearer", "email_id": user_id, "username": user_name, "type_is_paid": subscription_status}  
 
 @router.post("/transaction")
 async def transaction(transactionresponse: TransactionResponse):

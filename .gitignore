@@ -3,3 +3,6 @@ env/
 alembic.ini
 alembic/   
 user/text.py     
+text.py
+text.zip
+user/main.zip
