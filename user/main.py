@@ -185,17 +185,18 @@ def validate_credentials(email, password):
         """Validates user credentials."""
         conn = establish_db_connection()
         with conn.cursor() as cur:
-            cur.execute("SELECT id, username FROM session_table6 WHERE email = %s AND password = %s", (email, password))
+            cur.execute("SELECT id, username,role_id FROM session_table6 WHERE email = %s AND password = %s", (email, password))
             rows = cur.fetchall()
             if rows:
                 for row in rows:
                     id = row[0]
                     username = row[1]
+                    role_id=row[2]
         conn.close()
         if id is None:
             raise HTTPException(status_code=404, detail="User not found or invalid credentials.")
         else:
-            return id, username 
+            return id, username,role_id
     except Exception as e:
         #pass
         raise HTTPException(status_code=500, detail="Internal Server Error")    
@@ -455,15 +456,19 @@ async def sign_up(sign_up_request: schemas.SignUpRequest):
 
 @router.post("/login", tags=['authentication'])
 async def login(loginresponse: OAuth2PasswordRequestForm = Depends()):
+    print("fegguyegbcfge")
     email = loginresponse.username
+    print("gcfbgfuw")
     password = loginresponse.password
+    print("hgbugergbcbe")
     
     # Validate credentials
     user = validate_credentials(email, password)
+    print("jfbufgw",user)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     
-    user_id, user_name = user
+    user_id, user_name,role_id = user
     subscription_status = 'free'
     print("kjfgbievguf gferkdg")
     conn = establish_db_connection()
@@ -515,7 +520,8 @@ async def login(loginresponse: OAuth2PasswordRequestForm = Depends()):
                 "token_type": "bearer", 
                 "email_id": user_id, 
                 "username": user_name, 
-                "user_type": subscription_status
+                "user_type": subscription_status,
+                'role_id':role_id
             }
     except Exception as e:
         conn.rollback()
