@@ -103,7 +103,7 @@ def get_credit(user_id, num_tokens):
             cur.execute("UPDATE public.transaction SET amount_left = %s WHERE user_id = %s", (new_credit, user_id))
             conn.commit()
             conn.close()
-            return new_credit    
+            return      
         else:
             return None
 
@@ -184,19 +184,21 @@ def validate_credentials(email, password):
     try:
         """Validates user credentials."""
         conn = establish_db_connection()
+        print("bwgwqbefwgecgwgk")
         with conn.cursor() as cur:
-            cur.execute("SELECT id, username,role_id FROM session_table6 WHERE email = %s AND password = %s", (email, password))
+            hello=cur.execute("SELECT id, username, role_id FROM session_table6 WHERE email = %s AND password = %s", (email, password))
             rows = cur.fetchall()
+            print("biwwebcwcfb-------------------->",rows)
             if rows:
                 for row in rows:
                     id = row[0]
                     username = row[1]
-                    role_id=row[2]
+                    role_id = row[2]
         conn.close()
         if id is None:
             raise HTTPException(status_code=404, detail="User not found or invalid credentials.")
         else:
-            return id, username,role_id
+            return id, username, role_id 
     except Exception as e:
         #pass
         raise HTTPException(status_code=500, detail="Internal Server Error")    
@@ -353,7 +355,7 @@ def get_answer(email_id, query, llm, chat_id):
         credit_left = get_credit(email_id, one_chat)  
         # Check if chat_id is empty, if yes, create a new chat_id
         if chat_id == "":
-            with establish_db_connection() as conn:
+            with    () as conn:
                 chat_id = create_chat_id(conn, email_id)
             conn.commit()  
         # Fetch existing chat history or initialize if none exists
@@ -444,7 +446,7 @@ async def login_form():
         </form>
     """)
 
-@router.post("/sign_up",tags=['authetication'])
+@router.post("/sign_up",tags=['authentication'])
 async def sign_up(sign_up_request: schemas.SignUpRequest):
     try:
         
@@ -456,41 +458,35 @@ async def sign_up(sign_up_request: schemas.SignUpRequest):
 
 @router.post("/login", tags=['authentication'])
 async def login(loginresponse: OAuth2PasswordRequestForm = Depends()):
-    print("fegguyegbcfge")
     email = loginresponse.username
-    print("gcfbgfuw")
     password = loginresponse.password
-    print("hgbugergbcbe")
-    
     # Validate credentials
     user = validate_credentials(email, password)
-    print("jfbufgw",user)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    
-    user_id, user_name,role_id = user
-    subscription_status = 'free'
-    print("kjfgbievguf gferkdg")
+    user_id, user_name, role_id = user
     conn = establish_db_connection()
+    subscription_status = 'free'
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM public.transaction WHERE user_id = %s ORDER BY id ASC", (user_id,))
             rows = cur.fetchall()
-
+            print("rowsss", rows)
             if not rows:
                 # Insert default record if no transaction exists for the user
                 created_date = datetime.now()
-                expiry_date = None
+                expiry_date = created_date + timedelta(days=30)
                 session_id = None
-                amount = 0
-                amount_left = 0
+                amount = 5
+                amount_left = 5
                 currency = None
                 payment_intent = None
                 user_type = 'free'
-                
+                free_usage_counts = 3
+
                 insert_query = """
-                INSERT INTO transaction (user_id, session_id, created_date, expiry_date, user_type, amount, amount_left, payment_intent, currency)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+                INSERT INTO transaction (user_id, session_id, created_date, expiry_date, user_type, amount, amount_left, payment_intent, currency, free_usage_counts)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
                 """
                 cur.execute(insert_query, (
                     user_id, 
@@ -501,33 +497,41 @@ async def login(loginresponse: OAuth2PasswordRequestForm = Depends()):
                     amount,
                     amount_left,
                     payment_intent,
-                    currency   
+                    currency,
+                    free_usage_counts  
                 ))
                 conn.commit()
+                subscription_status = 'free'
             else:
-                # Check subscription status from existing records
-                if any(isinstance(item, str) and 'active' in item.strip().lower() for item in rows):
-                    subscription_status = 'active'
-                elif any(isinstance(item, str) and 'free' in item.strip().lower() for item in rows):
-                    subscription_status = 'free'
-                else:
-                    subscription_status = 'inactive'
-            
+                subscription_status = 'inactive'
+                for row in rows:
+                    if isinstance(row, tuple):
+                        for item in row:
+                            if isinstance(item, str):
+                                if 'active' in item.strip().lower():
+                                    subscription_status = 'active'
+                                    break
+                                elif 'free' in item.strip().lower():
+                                    subscription_status = 'free'
+                    if subscription_status == 'active':
+                        break
             access_token = create_access_token(data={"sub": email})
-            print("lfbeuvygiugier",access_token)
+            print("access_token", access_token)
             return {
                 "access_token": access_token, 
                 "token_type": "bearer", 
                 "email_id": user_id, 
                 "username": user_name, 
                 "user_type": subscription_status,
-                'role_id':role_id
+                "role_id": role_id
             }
     except Exception as e:
         conn.rollback()
         print(f"Database error: {e}")
     finally:
         conn.close()
+    
+    raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
     
     # # Create access token
     # access_token = create_access_token(data={"sub": email})
