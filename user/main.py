@@ -501,22 +501,25 @@ async def login(loginresponse: OAuth2PasswordRequestForm = Depends()):
                     free_usage_counts  
                 ))
                 conn.commit()
-                subscription_status = 'free'
             else:
-                subscription_status = 'inactive'
                 for row in rows:
+                    print('row', row)
                     if isinstance(row, tuple):
-                        for item in row:
-                            if isinstance(item, str):
-                                if 'active' in item.strip().lower():
-                                    subscription_status = 'active'
-                                    break
-                                elif 'free' in item.strip().lower():
-                                    subscription_status = 'free'
-                    if subscription_status == 'active':
-                        break
+                        user_type = row[7]
+                        print('user_type', user_type)
+                        subscription_status=user_type
+                                
             access_token = create_access_token(data={"sub": email})
             print("access_token", access_token)
+            hello={
+                "access_token": access_token, 
+                "token_type": "bearer", 
+                "email_id": user_id, 
+                "username": user_name, 
+                "user_type": subscription_status,
+                "role_id": role_id
+            }
+            print("hellooooooooooooooooooooooooooooooooooooooooooooooooooooooooo",hello)
             return {
                 "access_token": access_token, 
                 "token_type": "bearer", 
