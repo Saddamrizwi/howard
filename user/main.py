@@ -181,27 +181,24 @@ def create_session(email, password, username):
     return id, session_id
 
 def validate_credentials(email, password):
-    try:
-        """Validates user credentials."""
-        conn = establish_db_connection()
-        print("bwgwqbefwgecgwgk")
-        with conn.cursor() as cur:
-            hello=cur.execute("SELECT id, username, role_id FROM session_table6 WHERE email = %s AND password = %s", (email, password))
-            rows = cur.fetchall()
-            print("biwwebcwcfb-------------------->",rows)
-            if rows:
-                for row in rows:
-                    id = row[0]
-                    username = row[1]
-                    role_id = row[2]
-        conn.close()
-        if id is None:
-            raise HTTPException(status_code=404, detail="User not found or invalid credentials.")
-        else:
-            return id, username, role_id 
-    except Exception as e:
-        #pass
-        raise HTTPException(status_code=500, detail="Internal Server Error")    
+    """Validates user credentials."""
+    conn = establish_db_connection()
+    id = None  # Initialize id to ensure it has a default value
+    username = None  # Initialize username
+    role_id = None  # Initialize role_id
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, username, role_id FROM session_table6 WHERE email = %s AND password = %s", (email, password))
+        rows = cur.fetchall()
+        if rows:
+            for row in rows:
+                id = row[0]
+                username = row[1]
+                role_id = row[2]
+    conn.close()
+    if id is None:
+        raise HTTPException(status_code=404, detail="User not found or invalid credentials.")
+    else:
+        return id, username, role_id     
      
 
 def create_chat_id(conn, email_id):
@@ -534,7 +531,6 @@ async def login(loginresponse: OAuth2PasswordRequestForm = Depends()):
     finally:
         conn.close()
     
-    raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
     
     # # Create access token
     # access_token = create_access_token(data={"sub": email})
